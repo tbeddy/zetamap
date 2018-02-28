@@ -76,35 +76,67 @@ updated_at       |
 (defn map-ids
   "Convert an Elite Command map name to Zetawar map and scenario ids and descriptions."
   [ec-name]
-  (let [id-str (-> ec-name
+  (let [descr-str (.replace ec-name "+" "")
+        id-str (-> descr-str
                    .toLowerCase
                    (.replace " " "-")
                    (.replace "+" "")
-                   (.replace "'" ""))
-        map-id (keyword id-str)
-        scenario-id (keyword (str id-str "-multiplayer"))
-        scenario-description (str ec-name " Multiplayer")]
-    {:map-id map-id
-     :scenario-id scenario-id
-     :map-description ec-name
-     :scenario-description scenario-description}))
+                   (.replace "'" ""))]
+    {:map-id (keyword id-str)
+     :scenario-id (keyword (str id-str "-multiplayer"))
+     :map-description descr-str
+     :scenario-description (str descr-str " Multiplayer")}))
+
+(defn most-common-neighbor-terrain
+  "Find the most common terrain-type among a tile's neighbors.
+  Check all neighboring tiles (up to six). If two terrain-types
+  are tied for most frequent, which ever is determined to be the
+  'max-key' is selected."
+  [tiles q r]
+  (let [neighbors (filter #(or (and (= (- q 1) (:q %)) (= (- r 1) (:r %)))
+                               (and (= q (:q %)) (= (- r 1) (:r %)))
+                               (and (= (- q 1) (:q %)) (= r (:r %)))
+                               (and (= (+ q 1) (:q %)) (= r (:r %)))
+                               (and (= (- q 1) (:q %)) (= (+ r 1) (:r %)))
+                               (and (= q (:q %)) (= (+ r 1) (:r %))))
+                          tiles)]
+    (->> neighbors
+         (map :terrain-type)
+         frequencies
+         (apply max-key val)
+         key)))
+
+(defn generate-terrains-for-bases
+  "Generate a terrain-type for a tile with a base on it.
+  Leave all other tiles unchanged."
+  [tiles]
+  (map #(if (= :base-filler (:terrain-type %))
+          (assoc % :terrain-type (most-common-neighbor-terrain tiles (:q %) (:r %)))
+          %)
+       tiles))
 
 (defn terrains
   "Convert terrains to 'terrains' data structure.
   Elite Command represents a map's bases in both its 'terrains' data structure
   and its 'bases' data structure, whereas Zetawar puts an appropiate non-base
   terrain where a base would go in its 'terrains' data structure.
-  This function ignores all base terrains and expects the base data structure
-  to contain a corresponding base."
+  `generate-terrains-for-bases` fills in those missing terrains."
   [ec-tiles]
   (->> (for [[y row] (map-indexed vector ec-tiles)]
          (for [[x terrain-int] (map-indexed vector row)]
-           (if (and (>= terrain-int 0) (<= terrain-int 8))
+           (cond
+             (and (>= terrain-int 0) (<= terrain-int 8))
              {:q x
               :r y
-              :terrain-type (terrain-types terrain-int)})))
+              :terrain-type (terrain-types terrain-int)}
+
+             (and (>= terrain-int 10) (<= terrain-int 12))
+             {:q x
+              :r y
+              :terrain-type :base-filler})))
        flatten
        (remove nil?)
+       generate-terrains-for-bases
        (sort-by (juxt :r :q))
        (into [])))
 
@@ -116,7 +148,7 @@ updated_at       |
   'bases' data structure (for location again).
   This function creates the general 'bases' data structure."
   [ec-bases]
-  (->> (for [{:keys [x y base_type]}  ec-bases]
+  (->> (for [{:keys [x y base_type]} ec-bases]
          {:q x
           :r y
           :base-type (-> base_type
@@ -243,7 +275,7 @@ updated_at       |
           "    :created-by \"" creator "\"\n"
           "    :notes \"" description "\"\n"
           "    :terrains\n"
-          (format-terrains-or-bases (terrains tiles)) "}\n   ")
+          (format-terrains-or-bases (terrains tiles)) "}\n\n   ")
      (str "(def scenarios\n"
           "  {" scenario-id "\n"
           "   {:id " scenario-id "\n"
@@ -257,7 +289,7 @@ updated_at       |
           "    :bases\n"
           (format-terrains-or-bases (all-bases bases)) "\n"
           "    :factions\n"
-          (format-factions (factions bases units starting_credits)) "}\n   ")]))
+          (format-factions (factions bases units starting_credits)) "}\n\n   ")]))
 
 ;;;;;;;;;;;;;;;; Main ;;;;;;;;;;;;;;;;
 
